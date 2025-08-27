@@ -9,6 +9,7 @@ API FastAPI para extração de dados de relatórios PDF de underwriting e return
 - **Múltiplos parsers**: Suporte para diferentes formatos de PDF
 - **Fallbacks robustos**: Múltiplas estratégias de extração de texto
 
+## Deploy no Back4App
 
 ## Endpoints
 
@@ -31,3 +32,20 @@ API FastAPI para extração de dados de relatórios PDF de underwriting e return
     - `bearer`: Token Bearer para autenticação (opcional)
     - `basic`: Credenciais Basic Auth (opcional)
 
+## Estrutura do Projeto
+
+```
+project-unitrust-api/
+├── app/
+│   ├── main.py          # Aplicação principal FastAPI
+│   └── returns.py       # Módulo de returns (integrado)
+├── Dockerfile           # Configuração Docker
+├── docker-compose.yml   # Docker Compose para desenvolvimento
+├── requirements.txt     # Dependências Python
+└── README.md           # Este arquivo
+```
+
+## Deploy
+
+- Verifique os logs no dashboard
+- Teste localmente com Docker Compose
