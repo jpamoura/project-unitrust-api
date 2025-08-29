@@ -1,51 +1,50 @@
-# Underwriting Extractor API
+Underwriting Extractor API
+A FastAPI API for extracting data from PDF underwriting and returns reports.
 
-API FastAPI para extração de dados de relatórios PDF de underwriting e returns.
+Features
+Underwriting Extraction: /extract - Processes underwriting activity reports
 
-## Funcionalidades
+Returns Extraction: /returns - Processes returns/drafts reports
 
-- **Extração de Underwriting**: `/extract` - Processa relatórios de atividade de underwriting
-- **Extração de Returns**: `/returns` - Processa relatórios de returns/drafts
-- **Múltiplos parsers**: Suporte para diferentes formatos de PDF
-- **Fallbacks robustos**: Múltiplas estratégias de extração de texto
+Multiple Parsers: Support for different PDF formats
 
-## Deploy no Back4App
+Robust Fallbacks: Multiple text extraction strategies
 
+Deploy on Back4App
+Endpoints
+Health Check
+GET /healthz - Application status
 
-## Endpoints
+Underwriting Extraction
+POST /extract - Extracts data from underwriting reports
+  - Parameters:
+    - pdf: PDF file (required)
+    - forward_url: URL to forward data to (optional)
+    - return_text_sample: "1" to return a text sample (optional)
 
-### Health Check
-- `GET /healthz` - Status da aplicação
+Returns Extraction
+POST /returns - Extracts data from returns reports
+  - Parameters:
+    - pdf: PDF file (required)
+    - forward_url: URL to forward data to (optional)
+    - return_text_sample: "1" to return a text sample (optional)
+    - bearer: Bearer Token for authentication (optional)
+    - basic: Basic Auth credentials (optional)
 
-### Underwriting Extraction
-- `POST /extract` - Extrai dados de relatórios de underwriting
-  - Parâmetros:
-    - `pdf`: Arquivo PDF (obrigatório)
-    - `forward_url`: URL para encaminhar dados (opcional)
-    - `return_text_sample`: "1" para retornar amostra do texto (opcional)
-
-### Returns Extraction
-- `POST /returns` - Extrai dados de relatórios de returns
-  - Parâmetros:
-    - `pdf`: Arquivo PDF (obrigatório)
-    - `forward_url`: URL para encaminhar dados (opcional)
-    - `return_text_sample`: "1" para retornar amostra do texto (opcional)
-    - `bearer`: Token Bearer para autenticação (opcional)
-    - `basic`: Credenciais Basic Auth (opcional)
-
-## Estrutura do Projeto
-
-```
+Project Structure
 project-unitrust-api/
 ├── app/
-│   ├── main.py          # Aplicação principal FastAPI
-│   └── returns.py       # Módulo de returns (integrado)
-├── Dockerfile           # Configuração Docker
-├── docker-compose.yml   # Docker Compose para desenvolvimento
-├── requirements.txt     # Dependências Python
-└── README.md           # Este arquivo
-```
+│   ├── main.py          # Main FastAPI application
+│   └── returns.py       # Returns module (integrated)
+├── Dockerfile           # Docker configuration
+├── docker-compose.yml   # Docker Compose for development
+├── requirements.txt     # Python dependencies
+└── README.md           # This file
+Deployment
+Check logs on the dashboard
 
-#
-- Verifique os logs no dashboard
-- Teste localmente com Docker Compose
+<<<<<<< HEAD
+Test locally with Docker Compose
+=======
+Test locally with Docker Compose
+>>>>>>> e91faa8097921b667009a57cac3ed57d0faeef84
