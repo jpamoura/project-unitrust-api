@@ -43,4 +43,8 @@ project-unitrust-api/
 Deployment
 Check logs on the dashboard
 
+<<<<<<< HEAD
 Test locally with Docker Compose
+=======
+Test locally with Docker Compose
+>>>>>>> e91faa8097921b667009a57cac3ed57d0faeef84
