@@ -132,11 +132,11 @@ STATUS_HEADERS = [
 # Accepts 1+ spaces after the name
 POLICY_RE = re.compile(
     r"""^\s*(?P<policy>\d{9,10}[A-Z]?)\s+                 # policy
-    (?P<name>[A-Z0-9 .,'\-&/]+?)\s+                       # name (1+ espaço)
-    (?P<plan>[A-Z0-9\-]+)\s+                              # plan
-    (?P<premium>[\d,]+\.\d{2})\s+                         # premium
-    (?P<agent_id>\d{6,7})\s+                              # agent id
-    (?P<agent>[A-Z0-9 .,'\-&/]+?)\s*$                     # agent
+    (?P<name>[A-Z0-9 .,'\-&/]+?)\s+                      # name (1+ espaco)
+    (?P<plan>[A-Z0-9\-]+)\s+                             # plan
+    (?P<premium>[\d,]+\.\d{2})\s+                        # premium
+    (?P<agent_id>\d{6,7})\s+                             # agent id
+    (?P<agent>[A-Z0-9 .,'\-&/]+?)\s*$                    # agent
     """,
     re.VERBOSE
 )
@@ -350,9 +350,10 @@ def healthz():
 @app.post("/extract", tags=["underwriting"])
 async def extract_underwriting(
     pdf: UploadFile = File(...),
+    document_type: str = Form(...),
     # optional: override destination/credentials via form
     forward_url: Optional[str] = Form(None),
-    bearer: Optional[str] = Form(None),
+    bearer: Optional[str] = Form("unitrust-7ccc52a2-d463-40ca-a414-23601eb28c80"),
     basic: Optional[str] = Form(None),
     return_text_sample: Optional[str] = Form(None)
 ):
@@ -380,6 +381,7 @@ async def extract_underwriting(
     # default payload for Bubble
     bubble_payload = {
         "report_type": "underwriting",
+        "document_type": document_type,
         "report_date": report_date,
         "count": len(data),
         "items": data
@@ -392,6 +394,7 @@ async def extract_underwriting(
         forwarded = forward_to_url(bubble_payload, dest_url, auth_bearer, basic)
 
     resp = {
+        "document_type": document_type,
         "count": len(data),
         "report_date": report_date,
         "file": file_meta,
@@ -557,9 +560,10 @@ def parse_return_items(text: str) -> Dict[str, List[Dict]]:
 @app.post("/returns", tags=["returns"])
 async def extract_returns(
     pdf: UploadFile = File(...),
+    document_type: str = Form(...),
     # optional: override destination/credentials via form
     forward_url: Optional[str] = Form(None),
-    bearer: Optional[str] = Form(None),
+    bearer: Optional[str] = Form("unitrust-7ccc52a2-d463-40ca-a414-23601eb28c80"),
     basic: Optional[str] = Form(None),
     return_text_sample: Optional[str] = Form(None)
 ):
@@ -594,6 +598,7 @@ async def extract_returns(
     # default payload for Bubble
     bubble_payload = {
         "report_type": "returns",
+        "document_type": document_type,
         "report_date": report_date,
         "count": counts,
         "returned_items": parsed["returned_items"],
@@ -607,6 +612,7 @@ async def extract_returns(
         forwarded = forward_to_url(bubble_payload, dest_url, auth_bearer, basic)
 
     resp = {
+        "document_type": document_type,
         "report_date": report_date,
         "count": counts,
         "file": file_meta,
