@@ -1,10 +1,10 @@
 # app/main.py
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from io import BytesIO, StringIO
-import re, requests, datetime, os, uuid, csv
+import re, requests, datetime, os, uuid, csv, json
 import pandas as pd
 import numpy as np
 
@@ -26,13 +26,31 @@ X_PARSE_MASTER_KEY = os.getenv("X_PARSE_MASTER_KEY", "hAXjwSLgl7c2XlvL9gaPEhPcZb
 BACK4APP_FILES_URL = os.getenv("BACK4APP_FILES_URL", "https://parseapi.back4app.com/files")
 BACK4APP_CSV_CLASS_URL = os.getenv("BACK4APP_CSV_CLASS_URL", "https://parseapi.back4app.com/classes/Csv")
 
-
 # Upload limit (MB)
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "20"))  # default 20 MB
 
 # In-memory cache to temporarily store files between preview and confirmation.
 # WARNING: This cache is lost if the server restarts. For production, use a more robust cache like Redis.
 upload_cache: Dict[str, Dict] = {}
+
+
+def parse_custom_data_field(custom_data_field: Optional[str]) -> Optional[Dict]:
+    """
+    Try to parse a string (multipart form field) as JSON.
+    - If JSON dict, return it.
+    - If JSON but not dict (list/number), wrap as {"value": <obj>}.
+    - If not JSON, return {"_raw": <original string>}.
+    - If None/empty, return None.
+    """
+    if not custom_data_field:
+        return None
+    try:
+        obj = json.loads(custom_data_field)
+        if isinstance(obj, dict):
+            return obj
+        return {"value": obj}
+    except Exception:
+        return {"_raw": custom_data_field}
 
 
 async def read_upload_with_limit(file: UploadFile, max_mb: int = MAX_UPLOAD_MB) -> bytes:
@@ -47,6 +65,7 @@ async def read_upload_with_limit(file: UploadFile, max_mb: int = MAX_UPLOAD_MB) 
             detail=f"File exceeds the limit of {max_mb} MB."
         )
     return content
+
 
 def forward_to_url(payload: dict, url: str, bearer: Optional[str] = None, basic: Optional[str] = None, timeout: int = 20) -> dict:
     """
@@ -360,7 +379,8 @@ async def extract_underwriting(
     forward_url: Optional[str] = Form(None),
     bearer: Optional[str] = Form("unitrust-7ccc52a2-d463-40ca-a414-23601eb28c80"),
     basic: Optional[str] = Form(None),
-    return_text_sample: Optional[str] = Form(None)
+    return_text_sample: Optional[str] = Form(None),
+    custom_data: Optional[str] = Form(None),
 ):
     if not pdf.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please send a .pdf file")
@@ -383,20 +403,23 @@ async def extract_underwriting(
         for it in data:
             it["report_date"] = report_date
 
+    custom = parse_custom_data_field(custom_data)
+
     bubble_payload = {
         "report_type": "underwriting", "document_type": document_type, "report_date": report_date,
-        "count": len(data), "items": data
+        "count": len(data), "items": data, "custom_data": custom
     }
 
     dest_url = (forward_url or BUBBLE_URL)
     auth_bearer = (bearer or BUBBLE_TOKEN)
     forwarded = None
     if dest_url:
-        forwarded = forward_to_url(bubble_payload, dest_url, auth_bearer, basic)
+        forwarded = forward_to_url(bubble_payload, dest_url, auth_bearer, basic, timeout=30)
 
     resp = {
         "document_type": document_type, "count": len(data), "report_date": report_date,
-        "file": file_meta, "items": data, "forwarded": forwarded
+        "file": file_meta, "items": data, "forwarded": forwarded,
+        "custom_data": custom,
     }
     if (return_text_sample or "").strip().lower() in ("1", "true", "yes"):
         resp["text_sample"] = text[:1500]
@@ -512,7 +535,8 @@ async def extract_returns(
     forward_url: Optional[str] = Form(None),
     bearer: Optional[str] = Form("unitrust-7ccc52a2-d463-40ca-a414-23601eb28c80"),
     basic: Optional[str] = Form(None),
-    return_text_sample: Optional[str] = Form(None)
+    return_text_sample: Optional[str] = Form(None),
+    custom_data: Optional[str] = Form(None),
 ):
     if not pdf.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please send a .pdf file")
@@ -540,20 +564,24 @@ async def extract_returns(
         "total": len(parsed["returned_items"]) + len(parsed["returned_pre_notes"]),
     }
 
+    custom = parse_custom_data_field(custom_data)
+
     bubble_payload = {
         "report_type": "returns", "document_type": document_type, "report_date": report_date,
-        "count": counts, "returned_items": parsed["returned_items"], "returned_pre_notes": parsed["returned_pre_notes"]
+        "count": counts, "returned_items": parsed["returned_items"], "returned_pre_notes": parsed["returned_pre_notes"],
+        "custom_data": custom,
     }
 
     dest_url = (forward_url or BUBBLE_URL)
     auth_bearer = (bearer or BUBBLE_TOKEN)
     forwarded = None
     if dest_url:
-        forwarded = forward_to_url(bubble_payload, dest_url, auth_bearer, basic)
+        forwarded = forward_to_url(bubble_payload, dest_url, auth_bearer, basic, timeout=30)
 
     resp = {
         "document_type": document_type, "report_date": report_date, "count": counts,
-        "file": file_meta, "items": parsed, "forwarded": forwarded
+        "file": file_meta, "items": parsed, "forwarded": forwarded,
+        "custom_data": custom,
     }
     if (return_text_sample or "").strip().lower() in ("1", "true", "yes"):
         resp["text_sample"] = text[:1500]
@@ -566,62 +594,234 @@ async def extract_returns(
 
 class ConfirmPayload(BaseModel):
     upload_token: str
+    custom_data: Optional[Dict] = None   # JSON no body
+    forward_url: Optional[str] = None
+    bearer: Optional[str] = None
+    basic: Optional[str] = None
 
+# ------------ Background worker helpers (preview -> background processing + forward) ------------
+
+def compare_files_as_json_sync(new_content_str: str, old_file_meta: dict, new_filename: str) -> dict:
+    """
+    Synchronous comparison (for BackgroundTasks).
+    """
+    try:
+        old_file_url = old_file_meta.get('file', {}).get('url')
+        if not old_file_url:
+            raise ValueError("Old file URL not found in metadata.")
+        r_old = requests.get(old_file_url, timeout=20)
+        r_old.raise_for_status()
+        old_content_str = r_old.content.decode('utf-8', errors='replace')
+
+        list_new = parse_csv_robust(new_content_str)
+        list_old = parse_csv_robust(old_content_str)
+
+        if not list_new or 'Policy' not in list_new[0]:
+            return {"error": "'Policy' column not found in the new file."}
+        if not list_old or 'Policy' not in list_old[0]:
+            return {"error": "'Policy' column not found in the old file."}
+
+        map_new = {row['Policy']: row for row in list_new if row and row.get('Policy')}
+        map_old = {row['Policy']: row for row in list_old if row and row.get('Policy')}
+
+        keys_new = set(map_new.keys())
+        keys_old = set(map_old.keys())
+
+        added_ids = keys_new - keys_old
+        added_policies = [map_new[pid] for pid in added_ids]
+
+        common_ids = keys_new.intersection(keys_old)
+        modified_policies = []
+
+        fields_to_check = ['WritingAgent','AgentName','Company','Status','DOB','PolicyDate',
+                           'PaidtoDate','RecvDate','LastName','FirstName','MI','Plan','Face',
+                           'Form','Mode','ModePrem','Address1','Address2','Address3','Address4',
+                           'State','Zip','Phone','Email','App Date','WrtPct']
+
+        for pid in common_ids:
+            old_row = map_old[pid]; new_row = map_new[pid]
+            has_changes = False
+            for field in fields_to_check:
+                old_value = old_row.get(field, '')
+                new_value = new_row.get(field, '')
+                old_norm = str(old_value).strip().lower() if old_value is not None else ''
+                new_norm = str(new_value).strip().lower() if new_value is not None else ''
+                if field in ['Face','ModePrem','WrtPct']:
+                    try:
+                        old_num = float(old_norm.replace(',', '')) if old_norm else 0
+                        new_num = float(new_norm.replace(',', '')) if new_norm else 0
+                        if abs(old_num - new_num) > 0.01:
+                            has_changes = True
+                    except (ValueError, AttributeError):
+                        if old_norm != new_norm:
+                            has_changes = True
+                else:
+                    if old_norm != new_norm:
+                        has_changes = True
+            if has_changes:
+                modified_policies.append(new_row)
+
+        all_changes = []
+        all_changes.extend(added_policies)
+        all_changes.extend(modified_policies)
+
+        return {
+            "comparison_summary": {
+                "new_file": new_filename,
+                "old_file": old_file_meta.get('name_file'),
+                "total_changes": len(all_changes),
+                "new_records": len(added_policies),
+                "modified_records": len(modified_policies)
+            },
+            "changes": all_changes
+        }
+    except Exception as e:
+        return {"error": f"Error during JSON data comparison: {type(e).__name__} - {e}"}
+
+
+def _process_preview_and_forward(
+    upload_token: str,
+    csv_filename: str,
+    content_bytes: bytes,
+    custom: Optional[Dict],
+    dest_url: Optional[str],
+    auth_bearer: Optional[str],
+    basic: Optional[str]
+) -> None:
+    """
+    Runs in background:
+    - Fetch last CSV from Parse
+    - Run comparison (or 'first file')
+    - Forward everything via forward_to_url (includes custom_data and token)
+    """
+    if not dest_url:
+        return  # nothing to send
+
+    try:
+        content_str = content_bytes.decode('utf-8', errors='replace')
+        size_bytes = len(content_bytes)
+        file_meta = {
+            "name": csv_filename,
+            "size_bytes": size_bytes,
+            "size_mb": round(size_bytes / (1024 * 1024), 2),
+            "content_type": "text/csv",
+            "cached_at": datetime.datetime.utcnow().isoformat() + "Z"
+        }
+
+        # get last file from Parse
+        class_headers = {
+            'X-Parse-Application-Id': X_PARSE_APPLICATION_ID,
+            'X-Parse-Master-Key': X_PARSE_MASTER_KEY,
+        }
+        params = {'order': '-createdAt', 'limit': 1}
+
+        parse_error = None
+        try:
+            resp = requests.get(BACK4APP_CSV_CLASS_URL, headers=class_headers, params=params, timeout=15)
+            resp.raise_for_status()
+            files_metadata = resp.json().get('results', [])
+        except Exception as e:
+            files_metadata = []
+            parse_error = f"Error fetching last file from Back4app: {e}"
+
+        payload = {
+            "event": "csv_preview_processed",
+            "upload_token": upload_token,
+            "file": file_meta,
+            "custom_data": custom,
+            "processed_at": datetime.datetime.utcnow().isoformat() + "Z"
+        }
+
+        if files_metadata:
+            old_file_meta = files_metadata[0]
+            result = compare_files_as_json_sync(content_str, old_file_meta, new_filename=csv_filename)
+            if isinstance(result, dict):
+                payload.update(result)
+            else:
+                payload.update({"error": "Unknown comparison error"})
+        else:
+            # first file flow
+            try:
+                data_list = parse_csv_robust(content_str)
+                payload.update({
+                    "message": "First file: no previous CSV to compare.",
+                    "comparison_summary": {
+                        "new_file": csv_filename,
+                        "old_file": None,
+                        "added_count": len(data_list),
+                        "removed_count": 0,
+                        "modified_count": 0
+                    },
+                    "added_policies": data_list,
+                    "removed_policies": [],
+                    "modified_policies": []
+                })
+            except Exception as e:
+                payload.update({"error": f"Error processing the first CSV file: {e}"})
+
+        if parse_error:
+            payload["parse_lookup_warning"] = parse_error
+
+        forward_to_url(payload, dest_url, auth_bearer, basic, timeout=30)
+
+    except Exception as e:
+        # Try to forward a crash report
+        try:
+            forward_to_url({
+                "event": "csv_preview_processed",
+                "upload_token": upload_token,
+                "error": f"Background worker crashed: {type(e).__name__} - {e}",
+                "custom_data": custom
+            }, dest_url, auth_bearer, basic, timeout=15)
+        except Exception:
+            pass
+
+# -------------------- /compare/preview (FAST) --------------------
 @app.post("/compare/preview", tags=["CSV Comparison"])
-async def preview_csv_comparison(csv_file: UploadFile = File(...)):
+async def preview_csv_comparison(
+    background_tasks: BackgroundTasks,
+    csv_file: UploadFile = File(...),
+    custom_data: Optional[str] = Form(None),
+    forward_url: Optional[str] = Form(None),
+    bearer: Optional[str] = Form(None),
+    basic: Optional[str] = Form(None),
+):
     if not csv_file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please send a .csv file")
 
+    # read & close fast
     content_bytes = await read_upload_with_limit(csv_file)
     await csv_file.close()
-    content_str = content_bytes.decode('utf-8', errors='replace')
 
-    class_headers = {
-        'X-Parse-Application-Id': X_PARSE_APPLICATION_ID,
-        'X-Parse-Master-Key': X_PARSE_MASTER_KEY,
-    }
-    params = {'order': '-createdAt', 'limit': 1}
-    
-    try:
-        response = requests.get(BACK4APP_CSV_CLASS_URL, headers=class_headers, params=params)
-        response.raise_for_status()
-        files_metadata = response.json().get('results', [])
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching last file from Back4app: {e}")
-
-    if not files_metadata:
-        token = await cache_upload(csv_file, content_bytes)
-        try:
-            # Convert CSV to a list of dictionaries using robust parsing
-            data_list = parse_csv_robust(content_str)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error processing the first CSV file: {e}")
-
-        return JSONResponse({
-            "message": "This is the first file. There is no previous file to compare against.",
-            "upload_token": token,
-            "comparison_summary": {
-                "new_file": csv_file.filename, "old_file": None,
-                "added_count": len(data_list), "removed_count": 0, "modified_count": 0,
-            },
-            "added_policies": data_list,
-            "removed_policies": [], "modified_policies": []
-        })
-
-    old_file_meta = files_metadata[0]
-    comparison_results = await compare_files_as_json(content_str, old_file_meta, new_filename=csv_file.filename)
+    # cache for later confirmation
     token = await cache_upload(csv_file, content_bytes)
 
-    response_data = {
-        "message": "Comparison preview generated successfully. Use the token to confirm the upload.",
-        "upload_token": token,
-        **comparison_results
-    }
-    return JSONResponse(response_data)
+    # parse custom_data
+    custom = parse_custom_data_field(custom_data)
 
+    # schedule full processing + forward in background
+    dest_url = (forward_url or BUBBLE_URL)
+    auth_bearer = (bearer or BUBBLE_TOKEN)
+    background_tasks.add_task(
+        _process_preview_and_forward,
+        token,
+        csv_file.filename,
+        content_bytes,
+        custom,
+        dest_url,
+        auth_bearer,
+        basic
+    )
 
+    # respond immediately with 200 OK
+    return JSONResponse({"ok": True})
+
+# -------------------- /compare/confirm --------------------
 @app.post("/compare/confirm", tags=["CSV Comparison"])
-async def confirm_csv_upload(payload: ConfirmPayload):
+async def confirm_csv_upload(
+    payload: ConfirmPayload,
+    background_tasks: BackgroundTasks
+):
     token = payload.upload_token
     
     cached_data = upload_cache.get(token)
@@ -637,10 +837,29 @@ async def confirm_csv_upload(payload: ConfirmPayload):
     if token in upload_cache:
         del upload_cache[token]
 
+    # forward in background with upload results + custom_data echoed
+    dest_url = payload.forward_url or BUBBLE_URL
+    auth_bearer = payload.bearer or BUBBLE_TOKEN
+    if dest_url:
+        background_tasks.add_task(
+            forward_to_url,
+            {
+                "event": "csv_confirmed",
+                "upload_token": token,
+                "file_upload_response": upload_result,
+                "class_creation_response": class_result,
+                "custom_data": payload.custom_data,
+                "confirmed_at": datetime.datetime.utcnow().isoformat() + "Z"
+            },
+            dest_url,
+            auth_bearer,
+            payload.basic
+        )
+
+    # quick response
     return JSONResponse({
         "message": "File confirmed and saved successfully to Back4app!",
-        "file_upload_response": upload_result,
-        "class_creation_response": class_result
+        "ok": True
     })
 
 # =========================================================
@@ -656,7 +875,7 @@ async def cache_upload(file: UploadFile, content: bytes) -> str:
         "cached_at": datetime.datetime.utcnow().isoformat()
     }
     return token
-
+    
 def normalize_csv_content(content: str) -> str:
     """
     Normalizes CSV content with entire lines in quotes and internal values with double quotes.
@@ -888,6 +1107,7 @@ def clean_and_normalize_row(row: dict) -> dict:
             
     return cleaned_row
 
+# (async version retained if you want to call it elsewhere)
 async def compare_files_as_json(new_content_str: str, old_file_meta: dict, new_filename: str) -> dict:
     """
     Converts CSVs to lists of dictionaries and compares them robustly.
@@ -897,8 +1117,9 @@ async def compare_files_as_json(new_content_str: str, old_file_meta: dict, new_f
         if not old_file_url:
             raise ValueError("Old file URL not found in metadata.")
         
-        old_content_bytes = requests.get(old_file_url).content
-        old_content_str = old_content_bytes.decode('utf-8', errors='replace')
+        r_old = requests.get(old_file_url, timeout=20)
+        r_old.raise_for_status()
+        old_content_str = r_old.content.decode('utf-8', errors='replace')
         
         # Convert CSVs to lists of dictionaries using robust parsing
         list_new = parse_csv_robust(new_content_str)
@@ -937,7 +1158,6 @@ async def compare_files_as_json(new_content_str: str, old_file_meta: dict, new_f
             
             # Check if there were changes in any field
             has_changes = False
-            changes = {}
             
             for field in fields_to_check:
                 old_value = old_row.get(field, '')
@@ -954,25 +1174,13 @@ async def compare_files_as_json(new_content_str: str, old_file_meta: dict, new_f
                         new_num = float(new_normalized.replace(',', '')) if new_normalized else 0
                         if abs(old_num - new_num) > 0.01:  # Tolerance for rounding differences
                             has_changes = True
-                            changes[field] = {
-                                'old_value': old_row.get(field, ''),
-                                'new_value': new_row.get(field, '')
-                            }
                     except (ValueError, AttributeError):
                         if old_normalized != new_normalized:
                             has_changes = True
-                            changes[field] = {
-                                'old_value': old_row.get(field, ''),
-                                'new_value': new_row.get(field, '')
-                            }
                 else:
                     # For text fields, compare directly
                     if old_normalized != new_normalized:
                         has_changes = True
-                        changes[field] = {
-                            'old_value': old_row.get(field, ''),
-                            'new_value': new_row.get(field, '')
-                        }
             
             if has_changes:
                 # Return only the current record from the new file
@@ -980,11 +1188,7 @@ async def compare_files_as_json(new_content_str: str, old_file_meta: dict, new_f
         
         # Combine new and modified records
         all_changes = []
-        
-        # Add new records
         all_changes.extend(added_policies)
-        
-        # Add modified records
         all_changes.extend(modified_policies)
         
         return {
@@ -1001,7 +1205,7 @@ async def compare_files_as_json(new_content_str: str, old_file_meta: dict, new_f
         raise HTTPException(status_code=500, detail=f"Error during JSON data comparison: {type(e).__name__} - {e}")
 
 async def upload_file_to_back4app(filename: str, content: bytes, content_type: Optional[str]):
-    # Normaliza o nome do arquivo para evitar problemas com caracteres especiais
+    # Normalize filename to avoid issues with special characters
     normalized_filename = normalize_filename(filename)
     
     upload_headers = {
@@ -1011,7 +1215,7 @@ async def upload_file_to_back4app(filename: str, content: bytes, content_type: O
     }
     file_upload_url = f"{BACK4APP_FILES_URL}/{normalized_filename}"
     try:
-        upload_response = requests.post(file_upload_url, data=content, headers=upload_headers)
+        upload_response = requests.post(file_upload_url, data=content, headers=upload_headers, timeout=30)
         upload_response.raise_for_status()
         upload_result = upload_response.json()
     except requests.exceptions.RequestException as e:
@@ -1024,12 +1228,12 @@ async def upload_file_to_back4app(filename: str, content: bytes, content_type: O
     }
     utc_now = datetime.datetime.utcnow()
     payload = {
-        "name_file": normalized_filename,  # Usa o nome normalizado
+        "name_file": normalized_filename,
         "date": {"__type": "Date", "iso": utc_now.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'},
         "file": {"__type": "File", "name": upload_result.get("name"), "url": upload_result.get("url")}
     }
     try:
-        class_response = requests.post(BACK4APP_CSV_CLASS_URL, json=payload, headers=class_headers)
+        class_response = requests.post(BACK4APP_CSV_CLASS_URL, json=payload, headers=class_headers, timeout=15)
         class_response.raise_for_status()
         class_result = class_response.json()
     except requests.exceptions.RequestException as e:
