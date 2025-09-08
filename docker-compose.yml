@@ -9,4 +9,17 @@ services:
       - ./app:/app/app
     environment:
       - PYTHONPATH=/app
+      - BUBBLE_URL=${BUBBLE_URL:-}
+      - BUBBLE_TOKEN=${BUBBLE_TOKEN:-}
+      - X_PARSE_APPLICATION_ID=${X_PARSE_APPLICATION_ID:-tETk6wll2qxSh2OXxBWaLDh9ZjyGEvI9VppCVOe7}
+      - X_PARSE_MASTER_KEY=${X_PARSE_MASTER_KEY:-hAXjwSLgl7c2XlvL9gaPEhPcZbfbWvQ54um0EiOG}
+      - BACK4APP_FILES_URL=${BACK4APP_FILES_URL:-https://parseapi.back4app.com/files}
+      - BACK4APP_CSV_CLASS_URL=${BACK4APP_CSV_CLASS_URL:-https://parseapi.back4app.com/classes/Csv}
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-20}
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
