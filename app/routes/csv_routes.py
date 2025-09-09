@@ -130,8 +130,12 @@ async def preview_csv_comparison(
         basic
     )
 
-    # respond immediately with 200 OK
-    return JSONResponse({"ok": True})
+    # respond immediately with 200 OK and token
+    return JSONResponse({
+        "ok": True,
+        "token": token,
+        "message": "File uploaded successfully. Use the token to confirm the upload."
+    })
 
 @router.post("/confirm")
 async def confirm_csv_upload(

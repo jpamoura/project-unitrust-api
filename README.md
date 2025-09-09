@@ -48,6 +48,10 @@ A robust, modular FastAPI application for extracting data from PDF underwriting 
     - `forward_url`: URL to forward data to (optional)
     - `bearer`: Bearer token for authentication (optional)
     - `basic`: Basic auth credentials (optional)
+  - **Response:**
+    - `ok`: Boolean indicating success
+    - `token`: Confirmation token for the upload
+    - `message`: Success message with instructions
 
 - `POST /compare/confirm` - Confirm CSV file upload
   - **Body:**
