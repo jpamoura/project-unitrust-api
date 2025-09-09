@@ -1,9 +1,43 @@
+# Core FastAPI dependencies
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
+python-multipart==0.0.20
+
+# PDF processing libraries (with fallback strategies)
 pdfplumber==0.11.4
-pymupdf==1.24.10
+pymupdf==1.26.4
 pypdf2==3.0.1
+
+# Data processing
+pandas==2.3.2
+numpy==2.3.2
+
+# HTTP client
 requests==2.32.3
-python-multipart==0.0.9
-pandas==2.2.3
-numpy==1.26.4
+
+# Environment variables (required for .env support)
+python-dotenv==1.1.1
+
+# System monitoring and performance
+psutil==6.1.0
+
+# Logging and colored output
+colorlog==6.8.2
+
+# Security and authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# File handling and utilities
+python-magic==0.4.27
+chardet==5.2.0
+
+# Development dependencies (optional)
+# pytest==8.3.4
+# pytest-cov==6.0.0
+# black==24.10.0
+# flake8==7.1.1
+# mypy==1.13.0
+
+# Data validation (Pydantic is included with FastAPI)
+# pydantic is already included with fastapi

@@ -7,8 +7,11 @@ services:
       - "8000:8000"
     volumes:
       - ./app:/app/app
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
     environment:
       - PYTHONPATH=/app
+      # API Configuration
       - BUBBLE_URL=${BUBBLE_URL:-}
       - BUBBLE_TOKEN=${BUBBLE_TOKEN:-}
       - X_PARSE_APPLICATION_ID=${X_PARSE_APPLICATION_ID:-tETk6wll2qxSh2OXxBWaLDh9ZjyGEvI9VppCVOe7}
@@ -16,6 +19,16 @@ services:
       - BACK4APP_FILES_URL=${BACK4APP_FILES_URL:-https://parseapi.back4app.com/files}
       - BACK4APP_CSV_CLASS_URL=${BACK4APP_CSV_CLASS_URL:-https://parseapi.back4app.com/classes/Csv}
       - MAX_UPLOAD_MB=${MAX_UPLOAD_MB:-20}
+      # Environment Configuration
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - PROTECT_DOCS=${PROTECT_DOCS:-true}
+      - DOCS_USERNAME=${DOCS_USERNAME:-admin}
+      - DOCS_PASSWORD=${DOCS_PASSWORD:-dev123}
+      # Logging Configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FILE=${LOG_FILE:-/app/logs/unitrust_api.log}
+      # Performance Monitoring
+      - PERFORMANCE_MONITOR_INTERVAL=${PERFORMANCE_MONITOR_INTERVAL:-300}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
@@ -23,3 +36,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 512M
+          cpus: '0.25'
